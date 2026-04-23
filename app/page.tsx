@@ -1,65 +1,142 @@
-import Image from "next/image";
+import { getSupabaseServer } from "@/utils/supabaseServer";
+import { getTodayJstYmd } from "@/utils/jstDate";
+import OpenReportForm from "@/components/OpenReportForm";
 
-export default function Home() {
+function normalizeStoreId(store: string | string[] | undefined): string {
+  const raw = Array.isArray(store) ? store[0] : store;
+  return raw?.trim() ?? "";
+}
+
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<{ store?: string | string[] }>;
+}) {
+  const resolvedSearchParams = await searchParams;
+  const storeId = normalizeStoreId(resolvedSearchParams?.store);
+  const supabase = getSupabaseServer();
+
+  if (!storeId) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold text-rose-400 mb-2">店舗を指定できません</h1>
+        <p className="text-center text-sm text-[#6b7d94] max-w-sm">
+          URL に <code className="text-[#38c9a0]">?store=店舗ID</code>{" "}
+          を付けてアクセスしてください。
+        </p>
+      </div>
+    );
+  }
+
+  const today = getTodayJstYmd();
+
+  const { data: storeRow, error: storeError } = await supabase
+    .from("stores")
+    .select("store_name")
+    .eq("store_id", storeId)
+    .maybeSingle();
+
+  if (storeError) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold text-rose-400 mb-2">店舗情報の取得に失敗しました</h1>
+        <p className="text-center text-sm text-[#6b7d94]">{storeError.message}</p>
+      </div>
+    );
+  }
+
+  if (!storeRow) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold text-rose-400 mb-2">店舗が見つかりません</h1>
+        <p className="text-center text-sm text-[#6b7d94] max-w-sm">
+          指定された店舗ID（<span className="text-[#38c9a0] break-all">{storeId}</span>
+          ）のデータは存在しないか、閲覧権限がありません。
+        </p>
+        <p className="text-center text-xs text-[#5c6b7d] mt-3 max-w-md">
+          Supabase の RLS でブロックされる場合は、Vercel 等の環境変数に
+          <code className="text-[#38c9a0]"> SUPABASE_SERVICE_ROLE_KEY </code>
+          を設定するか、stores 用の SELECT ポリシーを追加してください（テーブル定義の変更は不要です）。
+        </p>
+      </div>
+    );
+  }
+
+  const storeDisplayName = storeRow.store_name?.trim() || "店舗";
+
+  const { data: clockRows, error: clockError } = await supabase
+    .from("clock_in_reports")
+    .select("staff_id")
+    .eq("store_id", storeId)
+    .eq("work_date", today);
+
+  if (clockError) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold text-rose-400 mb-2">出勤データの取得に失敗しました</h1>
+        <p className="text-center text-sm text-[#6b7d94]">{clockError.message}</p>
+      </div>
+    );
+  }
+
+  const uniqueStaffIds = [
+    ...new Set(
+      (clockRows ?? [])
+        .map((r) => r.staff_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+
+  let activeStaff: { staff_id: string; staff_name: string }[] = [];
+
+  if (uniqueStaffIds.length > 0) {
+    const { data: staffRows, error: staffError } = await supabase
+      .from("staffs")
+      .select("staff_id, staff_name")
+      .in("staff_id", uniqueStaffIds);
+
+    if (staffError) {
+      return (
+        <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+          <h1 className="text-xl font-bold text-rose-400 mb-2">スタッフ情報の取得に失敗しました</h1>
+          <p className="text-center text-sm text-[#6b7d94]">{staffError.message}</p>
+        </div>
+      );
+    }
+
+    const nameById = new Map(
+      (staffRows ?? []).map((s) => [s.staff_id, s.staff_name] as const),
+    );
+    activeStaff = uniqueStaffIds
+      .map((id) => {
+        const name = nameById.get(id);
+        return name ? { staff_id: id, staff_name: name } : null;
+      })
+      .filter((x): x is { staff_id: string; staff_name: string } => x !== null);
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="min-h-screen bg-[#0f1923] text-[#e8edf3] font-sans">
+      <header className="max-w-md mx-auto flex items-center gap-4 pt-8 px-4">
+        <div className="w-11 h-11 bg-[#38c9a0] rounded-xl flex items-center justify-center shrink-0 text-[#0f1923]">
+          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current" aria-hidden>
+            <path d="M12 2C8.686 2 6 4.686 6 8c0 4.5 6 12 6 12s6-7.5 6-12c0-3.314-2.686-6-6-6zm0 8.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z" />
+          </svg>
+        </div>
+        <div>
+          <h1 className="text-xs font-medium tracking-widest uppercase text-[#38c9a0] mb-1">
+            オープン報告
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+          <p className="text-xl font-bold">{storeDisplayName}</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </header>
+
+      <OpenReportForm
+        storeId={storeId}
+        activeStaff={activeStaff}
+        businessDateLabel={today}
+        noStaffOnShift={activeStaff.length === 0}
+      />
+    </main>
   );
 }
