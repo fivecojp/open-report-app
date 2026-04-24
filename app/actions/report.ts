@@ -105,28 +105,30 @@ export async function submitOpenReport(formData: {
 
     const delay = computeDelayJst(now, today, hoursRow?.open_time);
 
-    const { data: inserted, error: insertError } = await supabase
-      .from("actual_business_hours")
-      .insert({
-        store_id: formData.storeId,
-        business_date: today,
-        opened_at: openedAt,
-        opened_by_staff_id: formData.staffId,
-        open_delay_mark: false,
-        delay_minutes: 0,
-        image_url: null,
-      })
-      .select("id")
-      .single();
+    // 主キー列が `id` でないスキーマに対応: 行の特定は store_id + business_date + opened_at
+    const { error: insertError } = await supabase.from("actual_business_hours").insert({
+      store_id: formData.storeId,
+      business_date: today,
+      opened_at: openedAt,
+      opened_by_staff_id: formData.staffId,
+      open_delay_mark: false,
+      delay_minutes: 0,
+      image_url: null,
+    });
 
-    if (insertError || !inserted?.id) {
+    if (insertError) {
       return {
         success: false,
-        error: `データの保存に失敗しました: ${insertError?.message ?? "レコードIDを取得できませんでした"}`,
+        error: `データの保存に失敗しました: ${insertError.message}`,
       };
     }
 
-    const rowId = inserted.id as string;
+    const matchRow = () => ({
+      store_id: formData.storeId,
+      business_date: today,
+      opened_at: openedAt,
+    });
+
     const gasUrlRaw = process.env.GAS_WEBHOOK_URL;
     const gasUrl = typeof gasUrlRaw === "string" ? gasUrlRaw.trim() : "";
     if (!gasUrl) {
@@ -136,7 +138,7 @@ export async function submitOpenReport(formData: {
           open_delay_mark: delay.open_delay_mark,
           delay_minutes: delay.delay_minutes,
         })
-        .eq("id", rowId);
+        .match(matchRow());
       if (upErr) {
         return { success: false, error: `GAS 未設定のため遅延情報の保存に失敗: ${upErr.message}` };
       }
@@ -196,7 +198,7 @@ export async function submitOpenReport(formData: {
         delay_minutes: delay.delay_minutes,
         image_url: imageUrl,
       })
-      .eq("id", rowId);
+      .match(matchRow());
 
     if (updateError) {
       return { success: false, error: `記録の更新に失敗しました: ${updateError.message}` };

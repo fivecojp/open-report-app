@@ -119,7 +119,7 @@ export default async function Page({
   const { data: historyRows, error: historyError } = await supabase
     .from("actual_business_hours")
     .select(
-      "id, business_date, opened_at, open_delay_mark, delay_minutes, image_url, opened_by_staff_id",
+      "store_id, business_date, opened_at, open_delay_mark, delay_minutes, image_url, opened_by_staff_id",
     )
     .eq("store_id", storeId)
     .gte("business_date", historyFromYmd)
@@ -152,15 +152,20 @@ export default async function Page({
     }
   }
 
-  const reportHistory: ReportHistoryItem[] = (historyRows ?? []).map((r) => ({
-    id: String(r.id),
-    business_date: r.business_date,
-    opened_at: r.opened_at,
-    opened_by_name: staffNameById.get(r.opened_by_staff_id) ?? "（不明）",
-    open_delay_mark: Boolean(r.open_delay_mark),
-    delay_minutes: r.delay_minutes,
-    image_url: r.image_url,
-  }));
+  const reportHistory: ReportHistoryItem[] = (historyRows ?? []).map((r) => {
+    const sid = r.store_id as string;
+    const b = r.business_date as string;
+    const oa = r.opened_at as string;
+    return {
+      id: `${sid}|${b}|${oa}`,
+      business_date: b,
+      opened_at: oa,
+      opened_by_name: staffNameById.get(r.opened_by_staff_id) ?? "（不明）",
+      open_delay_mark: Boolean(r.open_delay_mark),
+      delay_minutes: r.delay_minutes,
+      image_url: r.image_url,
+    };
+  });
 
   return (
     <main className="min-h-screen bg-[#0f1923] text-[#e8edf3] font-sans">
