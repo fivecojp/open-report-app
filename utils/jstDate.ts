@@ -15,12 +15,3 @@ export function addDaysJstYmd(ymd: string, days: number): string {
   return new Date(t).toLocaleDateString("en-CA", { timeZone: JST_TZ });
 }
 
-/**
- * store_business_hours.weekday_type 用: 1=月曜 … 7=日曜
- * ※DB が 0=日〜6=土 なら report.ts 側のクエリ値を切り替えてください
- */
-export function getJstWeekdayTypeMon1ThroughSun7(): number {
-  const ymd = getTodayJstYmd();
-  const d = new Date(`${ymd}T12:00:00+09:00`).getUTCDay();
-  return d === 0 ? 7 : d;
-}

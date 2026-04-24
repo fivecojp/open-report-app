@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { getSupabaseServer } from "@/utils/supabaseServer";
-import { getJstWeekdayTypeMon1ThroughSun7, getTodayJstYmd } from "@/utils/jstDate";
+import { getTodayJstYmd } from "@/utils/jstDate";
+import { resolveStoreBusinessHoursWeekdayType } from "@/utils/storeBusinessWeekdayType";
 
 export type SubmitOpenReportResult =
   | { success: true }
@@ -89,7 +90,18 @@ export async function submitOpenReport(formData: {
     const now = new Date();
     const today = getTodayJstYmd();
     const openedAt = now.toISOString();
-    const weekdayType = getJstWeekdayTypeMon1ThroughSun7();
+
+    const resolvedWeekday = await resolveStoreBusinessHoursWeekdayType(
+      supabase,
+      formData.storeId,
+    );
+    if (resolvedWeekday.error) {
+      return {
+        success: false,
+        error: `休日情報の取得に失敗しました: ${resolvedWeekday.error}`,
+      };
+    }
+    const weekdayType = resolvedWeekday.weekdayType;
 
     const { data: hoursRow, error: hoursError } = await supabase
       .from("store_business_hours")
