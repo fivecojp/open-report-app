@@ -233,6 +233,33 @@ export default function OpenReportForm({
 
         <div className="mb-6">
           <div className="mb-2 block text-sm font-bold text-[#6b7d94]">店舗写真</div>
+          <div
+            className="mb-3 flex gap-2.5 rounded-xl border border-amber-500/50 bg-amber-500/[0.13] px-3 py-2.5 shadow-sm shadow-amber-900/20 sm:gap-3 sm:px-4 sm:py-3"
+            role="region"
+            aria-label="撮影に関する注意"
+          >
+            <span className="shrink-0 pt-0.5 text-amber-400" aria-hidden>
+              <svg
+                className="h-5 w-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </span>
+            <ul className="min-w-0 list-none space-y-1.5 text-sm leading-relaxed text-amber-100/95">
+              <li>必ず看板を出してオープンしている事が分かるように撮影してください。</li>
+              <li>
+                スマホ等で撮影したものを撮影や、2階からの撮影は禁止です。
+              </li>
+            </ul>
+          </div>
           <div className="relative aspect-video overflow-hidden rounded-xl border-2 border-dashed border-[#263348] bg-[#0f1923]">
             {!previewUrl ? (
               <>
