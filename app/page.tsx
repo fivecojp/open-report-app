@@ -1,6 +1,6 @@
 import { getSupabaseServer } from "@/utils/supabaseServer";
-import { getTodayJstYmd } from "@/utils/jstDate";
-import OpenReportForm from "@/components/OpenReportForm";
+import { addDaysJstYmd, getTodayJstYmd } from "@/utils/jstDate";
+import OpenReportForm, { type ReportHistoryItem } from "@/components/OpenReportForm";
 
 function normalizeStoreId(store: string | string[] | undefined): string {
   const raw = Array.isArray(store) ? store[0] : store;
@@ -115,6 +115,53 @@ export default async function Page({
       .filter((x): x is { staff_id: string; staff_name: string } => x !== null);
   }
 
+  const historyFromYmd = addDaysJstYmd(today, -30);
+  const { data: historyRows, error: historyError } = await supabase
+    .from("actual_business_hours")
+    .select(
+      "id, business_date, opened_at, open_delay_mark, delay_minutes, image_url, opened_by_staff_id",
+    )
+    .eq("store_id", storeId)
+    .gte("business_date", historyFromYmd)
+    .order("opened_at", { ascending: false });
+
+  if (historyError) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] text-[#e8edf3] flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold text-rose-400 mb-2">報告履歴の取得に失敗しました</h1>
+        <p className="text-center text-sm text-[#6b7d94]">{historyError.message}</p>
+      </div>
+    );
+  }
+
+  const histStaffIds = [
+    ...new Set(
+      (historyRows ?? [])
+        .map((r) => r.opened_by_staff_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  const staffNameById = new Map<string, string | null>();
+  if (histStaffIds.length > 0) {
+    const { data: histStaffs } = await supabase
+      .from("staffs")
+      .select("staff_id, staff_name")
+      .in("staff_id", histStaffIds);
+    for (const s of histStaffs ?? []) {
+      staffNameById.set(s.staff_id, s.staff_name);
+    }
+  }
+
+  const reportHistory: ReportHistoryItem[] = (historyRows ?? []).map((r) => ({
+    id: String(r.id),
+    business_date: r.business_date,
+    opened_at: r.opened_at,
+    opened_by_name: staffNameById.get(r.opened_by_staff_id) ?? "（不明）",
+    open_delay_mark: Boolean(r.open_delay_mark),
+    delay_minutes: r.delay_minutes,
+    image_url: r.image_url,
+  }));
+
   return (
     <main className="min-h-screen bg-[#0f1923] text-[#e8edf3] font-sans">
       <header className="max-w-md mx-auto flex items-center gap-4 pt-8 px-4">
@@ -136,6 +183,7 @@ export default async function Page({
         activeStaff={activeStaff}
         businessDateLabel={today}
         noStaffOnShift={activeStaff.length === 0}
+        reportHistory={reportHistory}
       />
     </main>
   );

@@ -1,13 +1,46 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { submitOpenReport } from "@/app/actions/report";
+
+export type ReportHistoryItem = {
+  id: string;
+  business_date: string;
+  opened_at: string;
+  opened_by_name: string;
+  open_delay_mark: boolean;
+  delay_minutes: number | null;
+  image_url: string | null;
+};
 
 interface Props {
   storeId: string;
   activeStaff: { staff_id: string; staff_name: string }[];
   businessDateLabel: string;
   noStaffOnShift: boolean;
+  reportHistory: ReportHistoryItem[];
+}
+
+function formatJstDateTime(iso: string) {
+  try {
+    return new Date(iso).toLocaleString("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatYmd(ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(ymd)) return ymd;
+  const [y, m, d] = ymd.slice(0, 10).split("-");
+  return `${y}/${m}/${d}`;
 }
 
 export default function OpenReportForm({
@@ -15,7 +48,9 @@ export default function OpenReportForm({
   activeStaff,
   businessDateLabel,
   noStaffOnShift,
+  reportHistory,
 }: Props) {
+  const router = useRouter();
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [compressedBase64, setCompressedBase64] = useState<string | null>(null);
@@ -119,6 +154,7 @@ export default function OpenReportForm({
       imageBase64: compressedBase64,
     });
     setIsSubmitting(false);
+    router.refresh();
 
     if (result.success) {
       setSelectedStaffId("");
@@ -133,7 +169,7 @@ export default function OpenReportForm({
   const formDisabled = noStaffOnShift;
 
   return (
-    <div className="max-w-md mx-auto p-4">
+    <div className="max-w-md mx-auto p-4 pb-10">
       {noStaffOnShift && (
         <div
           className="mt-4 mb-0 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/95"
@@ -175,7 +211,7 @@ export default function OpenReportForm({
                 setFormError(null);
               }}
               disabled={formDisabled}
-              className="w-full cursor-pointer appearance-none rounded-xl border border-[#263348] bg-[#0f1923] p-4 pr-10 text-[#e8edf3] outline-none transition focus:border-[#38c9a0] disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full min-h-12 cursor-pointer appearance-none rounded-xl border border-[#263348] bg-[#0f1923] p-4 pr-10 text-base text-[#e8edf3] outline-none transition focus:border-[#38c9a0] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">
                 {noStaffOnShift ? "選択できるスタッフがありません" : "選択してください"}
@@ -207,18 +243,18 @@ export default function OpenReportForm({
                   ref={fileInputRef}
                   onChange={handleFileChange}
                   disabled={formDisabled}
-                  className="absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                  className="absolute inset-0 z-10 min-h-12 cursor-pointer opacity-0 disabled:cursor-not-allowed"
                 />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[#6b7d94]">
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[#6b7d94] p-2">
                   <svg
                     viewBox="0 0 24 24"
-                    className="h-9 w-9 fill-none stroke-current stroke-2"
+                    className="h-9 w-9 flex-shrink-0 fill-none stroke-current stroke-2"
                     aria-hidden
                   >
                     <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
                     <circle cx="12" cy="13" r="4" />
                   </svg>
-                  <span className="text-sm font-medium">タップして撮影</span>
+                  <span className="text-sm font-medium text-center">タップして撮影</span>
                 </div>
               </>
             ) : (
@@ -244,11 +280,71 @@ export default function OpenReportForm({
           type="button"
           onClick={handleSubmit}
           disabled={isSubmitting || formDisabled}
-          className="w-full rounded-xl bg-[#38c9a0] py-4 font-bold text-[#0f1923] transition hover:bg-[#2fb892] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#38c9a0] disabled:opacity-50"
+          className="w-full min-h-14 rounded-xl bg-[#38c9a0] py-4 text-base font-bold text-[#0f1923] transition hover:bg-[#2fb892] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#38c9a0] disabled:opacity-50"
         >
           {isSubmitting ? "送信中…" : "オープン報告を送信"}
         </button>
       </div>
+
+      <section
+        className="mt-8 rounded-2xl border border-[#263348] bg-[#182030] p-5 shadow-lg shadow-black/20"
+        aria-label="過去30日の報告履歴"
+      >
+        <h2 className="text-sm font-bold tracking-wide text-[#38c9a0] mb-1">
+          過去30日の報告履歴
+        </h2>
+        <p className="text-xs text-[#5c6b7d] mb-4">営業日を基準に、直近30日分を表示します</p>
+        {reportHistory.length === 0 ? (
+          <p className="text-sm text-[#6b7d94] py-2">履歴はありません</p>
+        ) : (
+          <ul className="space-y-0 divide-y divide-[#263348] max-h-[min(60vh,28rem)] overflow-y-auto">
+            {reportHistory.map((h) => (
+              <li key={h.id} className="py-4 first:pt-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="min-w-0 text-base font-semibold text-[#e8edf3]">
+                    {formatYmd(h.business_date)}
+                    <span className="ml-1 text-sm font-normal text-[#6b7d94]">
+                      {h.opened_by_name}
+                    </span>
+                  </div>
+                  <time
+                    className="shrink-0 text-xs text-[#6b7d94] tabular-nums"
+                    dateTime={h.opened_at}
+                  >
+                    {formatJstDateTime(h.opened_at)}
+                  </time>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                  {h.open_delay_mark && (
+                    <span
+                      className="inline-flex items-center rounded-md border border-[#f05c5c] px-2 py-0.5 text-xs font-bold text-[#f05c5c]"
+                    >
+                      遅延
+                    </span>
+                  )}
+                  {h.open_delay_mark &&
+                    h.delay_minutes != null &&
+                    h.delay_minutes > 0 && (
+                      <span className="text-[#6b7d94]">
+                        +{h.delay_minutes} 分
+                      </span>
+                    )}
+                </div>
+                {h.image_url ? (
+                  <a
+                    href={h.image_url}
+                    className="mt-2 inline-block text-sm text-[#38c9a0] underline underline-offset-2 hover:text-[#2fb892] break-all"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    📷 画像を見る
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
