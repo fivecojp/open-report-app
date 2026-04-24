@@ -7,6 +7,13 @@ export type SubmitOpenReportResult =
   | { success: true }
   | { success: false; error: string };
 
+const GAS_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * オープン報告: Supabase へ保存 → GAS ウェブアプリへ通知
+ *
+ * GAS 側: POST ボディを text/plain として受け取り、JSON 文字列（{ storeId, reporter, image }）を解釈する想定
+ */
 export async function submitOpenReport(formData: {
   storeId: string;
   staffId: string;
@@ -31,8 +38,9 @@ export async function submitOpenReport(formData: {
       return { success: false, error: `データの保存に失敗しました: ${dbError.message}` };
     }
 
-    const gasUrl = process.env.GAS_WEBHOOK_URL;
-    if (!gasUrl || !String(gasUrl).trim()) {
+    const gasUrlRaw = process.env.GAS_WEBHOOK_URL;
+    const gasUrl = typeof gasUrlRaw === "string" ? gasUrlRaw.trim() : "";
+    if (!gasUrl) {
       return {
         success: false,
         error:
@@ -40,27 +48,52 @@ export async function submitOpenReport(formData: {
       };
     }
 
+    // GAS 連携: text/plain として JSON 文字列を送る（doPost: e.postData.getDataAsString() 等で受信）
+    const body = JSON.stringify({
+      storeId: formData.storeId,
+      reporter: formData.staffName,
+      image: formData.imageBase64,
+    });
+
     const gasResponse = await fetch(gasUrl, {
       method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({
-        storeId: formData.storeId,
-        reporter: formData.staffName,
-        image: formData.imageBase64,
-      }),
+      headers: {
+        "Content-Type": "text/plain",
+      },
+      body,
+      cache: "no-store",
+      signal: AbortSignal.timeout(GAS_REQUEST_TIMEOUT_MS),
     });
 
     if (!gasResponse.ok) {
+      const snippet = await readResponseSnippet(gasResponse);
       return {
         success: false,
-        error: `通知の送信に失敗しました（HTTP ${gasResponse.status}）`,
+        error: `GAS への通知に失敗しました（HTTP ${gasResponse.status} ${gasResponse.statusText}）${snippet}`,
       };
     }
 
     return { success: true };
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "送信処理でエラーが発生しました";
+    if (e instanceof Error) {
+      if (e.name === "TimeoutError" || e.name === "AbortError") {
+        return { success: false, error: "GAS への送信中にタイムアウトしました。画像が大きすぎる可能性があります。" };
+      }
+      console.error("submitOpenReport:", e);
+      return { success: false, error: e.message };
+    }
     console.error("submitOpenReport:", e);
-    return { success: false, error: message };
+    return { success: false, error: "送信処理でエラーが発生しました" };
+  }
+}
+
+async function readResponseSnippet(res: Response): Promise<string> {
+  try {
+    const t = (await res.text()).trim();
+    if (!t) return "";
+    const max = 200;
+    return ` — ${t.length > max ? `${t.slice(0, max)}…` : t}`;
+  } catch {
+    return "";
   }
 }
