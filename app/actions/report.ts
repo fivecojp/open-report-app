@@ -1,5 +1,6 @@
 "use server";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { getSupabaseServer } from "@/utils/supabaseServer";
 import { getTodayJstYmd } from "@/utils/jstDate";
@@ -57,27 +58,35 @@ function computeDelayJst(
   };
 }
 
-function parseImageUrlFromGasResponse(text: string): string | null {
-  const t = text.trim();
-  if (!t) return null;
-  try {
-    const o = JSON.parse(t) as Record<string, unknown>;
-    const u = o.imageUrl ?? o.image_url;
-    if (typeof u === "string" && u.trim().length > 0) {
-      return u.trim();
-    }
-  } catch {
-    /* プレーンテキストの URL のみの場合 */
+async function updateActualBusinessHoursRow(
+  supabase: SupabaseClient,
+  businessHoursId: string,
+  payload: {
+    open_delay_mark: boolean;
+    delay_minutes: number;
+    image_url: string | null;
+  },
+): Promise<{ error: string | null }> {
+  const { error: updateError } = await supabase
+    .from("actual_business_hours")
+    .update({
+      open_delay_mark: payload.open_delay_mark,
+      delay_minutes: payload.delay_minutes,
+      image_url: payload.image_url,
+    })
+    .eq("business_hours_id", businessHoursId);
+
+  if (updateError) {
+    console.error("UPDATEエラー:", updateError);
+    return { error: updateError.message };
   }
-  if (/^https?:\/\//i.test(t)) {
-    return t;
-  }
-  return null;
+  console.log("UPDATE成功", { business_hours_id: businessHoursId });
+  return { error: null };
 }
 
 /**
  * オープン報告: store_business_hours を参照して遅延を算出
- * ① actual_business_hours INSERT（プレースホルダ）→ ② GAS（fetch）→ ③ 遅延・画像URL を UPDATE
+ * ① actual_business_hours INSERT → ② GAS（fetch）→ ③ 遅延・画像URL を UPDATE（business_hours_id で特定）
  */
 export async function submitOpenReport(formData: {
   storeId: string;
@@ -116,17 +125,24 @@ export async function submitOpenReport(formData: {
     }
 
     const delay = computeDelayJst(now, today, hoursRow?.open_time);
+    const delayMinutes = delay.delay_minutes;
+    const delayMark = delay.open_delay_mark;
 
-    // 主キー列が `id` でないスキーマに対応: 行の特定は store_id + business_date + opened_at
-    const { error: insertError } = await supabase.from("actual_business_hours").insert({
+    const insertRow = {
       store_id: formData.storeId,
       business_date: today,
       opened_at: openedAt,
       opened_by_staff_id: formData.staffId,
       open_delay_mark: false,
       delay_minutes: 0,
-      image_url: null,
-    });
+      image_url: null as string | null,
+    };
+
+    const { data: insertedData, error: insertError } = await supabase
+      .from("actual_business_hours")
+      .insert([insertRow])
+      .select("business_hours_id")
+      .single();
 
     if (insertError) {
       return {
@@ -135,24 +151,25 @@ export async function submitOpenReport(formData: {
       };
     }
 
-    const matchRow = () => ({
-      store_id: formData.storeId,
-      business_date: today,
-      opened_at: openedAt,
-    });
+    const businessHoursId = insertedData?.business_hours_id;
+    if (businessHoursId == null || String(businessHoursId).trim() === "") {
+      return {
+        success: false,
+        error: "挿入後に business_hours_id を取得できませんでした。テーブル定義を確認してください。",
+      };
+    }
+    const pk = String(businessHoursId);
 
     const gasUrlRaw = process.env.GAS_WEBHOOK_URL;
     const gasUrl = typeof gasUrlRaw === "string" ? gasUrlRaw.trim() : "";
     if (!gasUrl) {
-      const { error: upErr } = await supabase
-        .from("actual_business_hours")
-        .update({
-          open_delay_mark: delay.open_delay_mark,
-          delay_minutes: delay.delay_minutes,
-        })
-        .match(matchRow());
+      const { error: upErr } = await updateActualBusinessHoursRow(supabase, pk, {
+        open_delay_mark: delayMark,
+        delay_minutes: delayMinutes,
+        image_url: null,
+      });
       if (upErr) {
-        return { success: false, error: `GAS 未設定のため遅延情報の保存に失敗: ${upErr.message}` };
+        return { success: false, error: `GAS 未設定のため遅延情報の保存に失敗: ${upErr}` };
       }
       revalidatePath("/");
       return {
@@ -171,6 +188,7 @@ export async function submitOpenReport(formData: {
     let imageUrl: string | null = null;
     let gasFailed = false;
     let gasErrorDetail = "";
+
     try {
       const gasResponse = await fetch(gasUrl, {
         method: "POST",
@@ -181,39 +199,53 @@ export async function submitOpenReport(formData: {
         cache: "no-store",
         signal: AbortSignal.timeout(GAS_REQUEST_TIMEOUT_MS),
       });
-      const responseText = await gasResponse.text();
-      if (gasResponse.ok) {
-        imageUrl = parseImageUrlFromGasResponse(responseText);
-      } else {
+
+      const text = await gasResponse.text();
+      console.log("GASレスポンスの生データ:", text);
+
+      if (!gasResponse.ok) {
         gasFailed = true;
         const max = 200;
-        const sn = responseText.length > max ? `${responseText.slice(0, max)}…` : responseText;
+        const sn = text.length > max ? `${text.slice(0, max)}…` : text;
         gasErrorDetail = `GAS への通知に失敗しました（HTTP ${gasResponse.status} ${gasResponse.statusText}）${sn ? ` — ${sn}` : ""}`;
+        imageUrl = null;
+      } else {
+        try {
+          const gasResult = JSON.parse(text) as { status?: string; imageUrl?: string };
+          const fromGas = gasResult.imageUrl;
+          imageUrl = typeof fromGas === "string" && fromGas.trim() !== "" ? fromGas.trim() : null;
+          if (gasResult.status && gasResult.status !== "ok") {
+            console.error("GAS status が ok 以外:", gasResult.status);
+          }
+        } catch (parseErr) {
+          console.error("GAS レスポンスの JSON.parse 失敗:", parseErr);
+          gasFailed = true;
+          imageUrl = null;
+          gasErrorDetail = "GASのレスポンスをJSONとして解析できませんでした";
+        }
       }
     } catch (e) {
       gasFailed = true;
+      imageUrl = null;
       if (e instanceof Error) {
         if (e.name === "TimeoutError" || e.name === "AbortError") {
           gasErrorDetail = "GAS への送信中にタイムアウトしました。画像が大きすぎる可能性があります。";
         } else {
           gasErrorDetail = e.message;
         }
+        console.error("GAS fetch エラー:", e);
       } else {
         gasErrorDetail = "GAS への送信中にエラーが発生しました";
       }
     }
 
-    const { error: updateError } = await supabase
-      .from("actual_business_hours")
-      .update({
-        open_delay_mark: delay.open_delay_mark,
-        delay_minutes: delay.delay_minutes,
-        image_url: imageUrl,
-      })
-      .match(matchRow());
-
-    if (updateError) {
-      return { success: false, error: `記録の更新に失敗しました: ${updateError.message}` };
+    const { error: upErr2 } = await updateActualBusinessHoursRow(supabase, pk, {
+      open_delay_mark: delayMark,
+      delay_minutes: delayMinutes,
+      image_url: imageUrl,
+    });
+    if (upErr2) {
+      return { success: false, error: `記録の更新に失敗しました: ${upErr2}` };
     }
 
     revalidatePath("/");
@@ -226,10 +258,10 @@ export async function submitOpenReport(formData: {
       if (e.name === "TimeoutError" || e.name === "AbortError") {
         return { success: false, error: "GAS への送信中にタイムアウトしました。画像が大きすぎる可能性があります。" };
       }
-      console.error("submitOpenReport:", e);
+      console.error("submitOpenReport 予期せぬエラー:", e);
       return { success: false, error: e.message };
     }
-    console.error("submitOpenReport:", e);
+    console.error("submitOpenReport 予期せぬエラー:", e);
     return { success: false, error: "送信処理でエラーが発生しました" };
   }
 }
