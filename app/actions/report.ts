@@ -7,7 +7,22 @@ export type SubmitOpenReportResult =
   | { success: true }
   | { success: false; error: string };
 
+/** Supabase の store_id (UUID) → スプレッドシート用店舗ID。GAS POST の `storeId` のみに使用。 */
+const STORE_ID_MAP: Readonly<Record<string, string>> = {
+  "20322c74-6172-4cfc-ba2a-a514e7fefc67": "101",
+  "73d29ce5-345e-44af-a040-d0135eb11977": "104",
+  "92f17aa3-936a-4384-8ee8-18685a025903": "103",
+  "d440eab1-2357-4876-b113-5ec10a4466f3": "105",
+  "d5aecc39-1976-413d-9c72-6b9f376c2361": "102",
+  "f5d4b199-3e2a-4aa6-b555-9cc5dd1ae3e5": "106",
+} as const;
+
 const GAS_REQUEST_TIMEOUT_MS = 120_000;
+
+function toGasStoreId(uuid: string): string {
+  const key = uuid.trim().toLowerCase();
+  return STORE_ID_MAP[key] ?? uuid;
+}
 
 /**
  * オープン報告: Supabase へ保存 → GAS ウェブアプリへ通知
@@ -48,9 +63,9 @@ export async function submitOpenReport(formData: {
       };
     }
 
-    // GAS 連携: text/plain として JSON 文字列を送る（doPost: e.postData.getDataAsString() 等で受信）
+    // GAS 連携: storeId はスプレッドシート用に変換。未登録UUIDはそのまま送る
     const body = JSON.stringify({
-      storeId: formData.storeId,
+      storeId: toGasStoreId(formData.storeId),
       reporter: formData.staffName,
       image: formData.imageBase64,
     });
